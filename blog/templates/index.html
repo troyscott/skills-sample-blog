@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Posts</h1>
+<ul>
+{% for p in posts %}
+  <li>{{ p.published }} · <a href="/posts/{{ p.slug }}">{{ p.title }}</a></li>
+{% else %}
+  <li>No posts yet. Run <code>python -m blog sync</code>.</li>
+{% endfor %}
+</ul>
+{% endblock %}
