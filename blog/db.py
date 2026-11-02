@@ -28,14 +28,23 @@ def applied(conn: sqlite3.Connection) -> dict[str, str]:
     return dict(conn.execute("SELECT name, checksum FROM schema_migrations"))
 
 
+def _files(migrations_dir: Path) -> list[Path]:
+    """The migration files in order. A missing folder is an error, not "nothing to do"."""
+    if not migrations_dir.is_dir():
+        raise MigrationError(
+            f"migrations folder not found: {migrations_dir}; run from the project root"
+        )
+    return sorted(migrations_dir.glob("*.sql"))
+
+
 def pending(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR) -> list[Path]:
     done = applied(conn)
-    return [p for p in sorted(migrations_dir.glob("*.sql")) if p.name not in done]
+    return [p for p in _files(migrations_dir) if p.name not in done]
 
 
 def verify(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR) -> None:
     """Fail if an applied migration was edited or deleted since it ran."""
-    files = {p.name: p for p in migrations_dir.glob("*.sql")}
+    files = {p.name: p for p in _files(migrations_dir)}
     for name, checksum in applied(conn).items():
         if name not in files:
             raise MigrationError(f"{name} was applied but its file is gone; restore it")
@@ -59,15 +68,18 @@ def migrate(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR) -> 
 def _apply(conn: sqlite3.Connection, path: Path) -> str:
     sql = path.read_text(encoding="utf-8")
     try:
-        conn.execute("BEGIN")
-        for statement in filter(str.strip, sql.split(";")):
-            conn.execute(statement)
+        # executescript parses the file as SQLite does, so a ';' inside a string
+        # literal, a comment or a trigger body doesn't split a statement. With
+        # isolation_level None there is no implicit commit, so BEGIN holds until
+        # the COMMIT below.
+        conn.executescript("BEGIN;\n" + sql)
         conn.execute(
             "INSERT INTO schema_migrations (name, checksum) VALUES (?, ?)",
             (path.name, _checksum(path)),
         )
         conn.execute("COMMIT")
     except sqlite3.Error as exc:
-        conn.execute("ROLLBACK")
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise MigrationError(f"{path.name} failed and was rolled back: {exc}") from exc
     return path.name
