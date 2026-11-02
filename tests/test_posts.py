@@ -34,6 +34,28 @@ def test_bad_posts_name_the_file_and_the_problem(tmp_path, text, message):
     assert "bad.md" in str(err.value)
 
 
+def test_closing_line_without_trailing_newline_still_closes(tmp_path):
+    post = parse_post(write(tmp_path, "a.md", "---\ntitle: a\npublished: 2026-11-02\n---"))
+    assert (post.title, post.body) == ("a", "\n")
+
+
+def test_sync_names_a_missing_or_empty_folder(conn, tmp_path):
+    with pytest.raises(PostError, match="posts folder not found"):
+        sync(conn, tmp_path / "post")
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(PostError, match="no .md files"):
+        sync(conn, tmp_path / "empty")
+
+
+def test_sync_deletes_a_post_whose_file_is_gone(conn, tmp_path):
+    write(tmp_path, "a.md", GOOD)
+    gone = write(tmp_path, "b.md", GOOD)
+    assert sync(conn, tmp_path) == 2
+    gone.unlink()
+    assert sync(conn, tmp_path) == 1
+    assert [r[0] for r in conn.execute("SELECT slug FROM posts")] == ["a"]
+
+
 def test_sync_is_all_or_nothing(conn, tmp_path):
     write(tmp_path, "a.md", GOOD)
     write(tmp_path, "b.md", "no front matter")

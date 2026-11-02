@@ -24,6 +24,8 @@ class Post:
 
 def parse_post(path: Path) -> Post:
     text = path.read_text(encoding="utf-8")
+    if not text.endswith("\n"):
+        text += "\n"  # a closing '---' on the last line still closes the block
     if not text.startswith("---\n"):
         raise PostError(f"{path.name}: must start with a '---' front matter block")
     try:
@@ -50,8 +52,14 @@ def parse_post(path: Path) -> Post:
 
 
 def sync(conn: sqlite3.Connection, posts_dir: Path) -> int:
-    """Insert or update every post in posts_dir. All or nothing: one bad file loads none."""
-    posts = [parse_post(p) for p in sorted(posts_dir.glob("*.md"))]
+    """Make the posts table match posts_dir: insert or update every file, delete rows
+    whose file is gone. All or nothing: one bad file changes nothing."""
+    if not posts_dir.is_dir():
+        raise PostError(f"posts folder not found: {posts_dir}; run from the project root")
+    files = sorted(posts_dir.glob("*.md"))
+    if not files:
+        raise PostError(f"no .md files in {posts_dir}; nothing to load, nothing deleted")
+    posts = [parse_post(p) for p in files]
     with conn:
         for p in posts:
             conn.execute(
@@ -60,4 +68,9 @@ def sync(conn: sqlite3.Connection, posts_dir: Path) -> int:
                 " published = excluded.published, tags = excluded.tags, body = excluded.body",
                 (p.slug, p.title, p.published, p.tags, p.body),
             )
+        placeholders = ", ".join("?" * len(posts))
+        conn.execute(
+            f"DELETE FROM posts WHERE slug NOT IN ({placeholders})",  # noqa: S608 — placeholders only
+            [p.slug for p in posts],
+        )
     return len(posts)

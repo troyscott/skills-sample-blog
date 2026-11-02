@@ -10,6 +10,7 @@
 import argparse
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -27,7 +28,8 @@ def backup(db_path: Path, backups_dir: Path) -> Path:
     while target.exists():
         n += 1
         target = backups_dir / f"{stem}-{n}.db"
-    with sqlite3.connect(db_path) as src, sqlite3.connect(target) as dst:
+    # closing(): a Connection used as a context manager commits but does not close.
+    with closing(sqlite3.connect(db_path)) as src, closing(sqlite3.connect(target)) as dst:
         src.backup(dst)
     return target
 
@@ -42,7 +44,11 @@ def main() -> int:
     db_path = Path(args.db)
     is_new = not db_path.exists()
 
-    conn = sqlite3.connect(db_path)
+    try:
+        conn = sqlite3.connect(db_path)
+    except sqlite3.Error as exc:
+        print(f"error: can't open {db_path}: {exc}. Check --db and that its folder exists", file=sys.stderr)
+        return 1
     try:
         if args.verify:
             verify(conn)
@@ -58,6 +64,10 @@ def main() -> int:
             print(f"applied: {name}")
     except MigrationError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except (sqlite3.Error, OSError) as exc:
+        # Backup or file access failed before any migration ran.
+        print(f"error: nothing applied; backup or database access failed: {exc}", file=sys.stderr)
         return 1
     finally:
         conn.close()
